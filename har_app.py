@@ -363,7 +363,10 @@ def plot_confidence_over_time(activity_log):
 
 def main():
     st.markdown('<p class="main-header">🏃 Human Activity Recognition System</p>', unsafe_allow_html=True)
-    
+    if 'activity_log' in st.session_state:
+        activity_log = st.session_state['activity_log']
+        if isinstance(activity_log, pd.DataFrame) and 'time' not in activity_log.columns:
+            del st.session_state['activity_log']
     # Load model
     model, scaler = load_model_and_scaler()
     
