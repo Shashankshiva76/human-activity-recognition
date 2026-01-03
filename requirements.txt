@@ -8,3 +8,5 @@ yt-dlp
 ffmpeg-python
 plotly
 av
+scikit-learn
+
