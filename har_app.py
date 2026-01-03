@@ -519,26 +519,26 @@ def main():
                         st.subheader("Processed Video")
                         st.video(output_path)
                         
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Duration", f"{activity_log['time'].max():.1f}s")
-                        with col2:
-                            most_common = activity_log['activity'].mode()[0]
-                            st.metric("Primary Activity", most_common)
-                        with col3:
-                            avg_conf = activity_log['confidence'].mean()
-                            st.metric("Avg Confidence", f"{avg_conf:.1%}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            fig = plot_activity_timeline(activity_log)
+                        if not activity_log.empty and 'time' in activity_log.columns:
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Duration", f"{activity_log['time'].max():.1f}s")
+                            with col2:
+                                most_common = activity_log['activity'].mode()[0] if len(activity_log['activity'].mode()) > 0 else "N/A"
+                                st.metric("Primary Activity", most_common)
+                            with col3:
+                                avg_conf = activity_log['confidence'].mean()
+                                st.metric("Avg Confidence", f"{avg_conf:.1%}")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                fig = plot_activity_timeline(activity_log)
+                                st.plotly_chart(fig, use_container_width=True)
+                            with col2:
+                                fig = plot_activity_distribution(activity_log)
+                                st.plotly_chart(fig, use_container_width=True)
+                            
+                            fig = plot_confidence_over_time(activity_log)
                             st.plotly_chart(fig, use_container_width=True)
-                        with col2:
-                            fig = plot_activity_distribution(activity_log)
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        fig = plot_confidence_over_time(activity_log)
-                        st.plotly_chart(fig, use_container_width=True)
         
        
     # Tab 2: Analytics
@@ -664,4 +664,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
