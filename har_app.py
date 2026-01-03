@@ -1,3 +1,4 @@
+CODE
 import streamlit as st
 import cv2
 import numpy as np
@@ -394,7 +395,11 @@ def main():
             "Select Input Mode",
             ["📱 Sensor Data (JSON)", "📁 Upload Video"]
         )
-    
+    # Clear video session state when switching to sensor mode
+    if input_mode == "📱 Sensor Data (JSON)" and 'activity_log' in st.session_state:
+        if 'processed_video' in st.session_state:
+            del st.session_state['activity_log']
+            del st.session_state['processed_video']
     # Main tabs
     tabs = st.tabs(["🎯 Recognition", "📈 Analytics", "ℹ️ About"])
     
@@ -543,6 +548,12 @@ def main():
         
         if 'activity_log' in st.session_state:
             activity_log = st.session_state['activity_log']
+            
+            # Validate that activity_log has required columns
+            required_columns = ['time', 'activity', 'confidence']
+            if not all(col in activity_log.columns for col in required_columns):
+                st.warning("Activity log is incomplete. Please process a video to see full analytics.")
+                st.stop()
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
