@@ -517,7 +517,10 @@ def main():
                         
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Duration", f"{activity_log['time'].max():.1f}s")
+                            if 'time' in activity_log.columns:
+                                st.metric("Duration", f"{activity_log['time'].max():.1f}s")
+                            else:
+                                st.metric("Duration", "N/A")
                         with col2:
                             most_common = activity_log['activity'].mode()[0]
                             st.metric("Primary Activity", most_common)
