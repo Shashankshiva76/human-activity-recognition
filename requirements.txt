@@ -6,4 +6,5 @@ numpy
 temp
 yt-dlp
 ffmpeg-python
+plotly
 av
