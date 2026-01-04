@@ -4,6 +4,13 @@ import numpy as np
 import mediapipe as mp
 import joblib
 import pandas as pd
+import imageio.v3 as iio
+import numpy as np
+from collections import deque
+import tempfile
+import logging
+import os
+import cv2
 from collections import deque
 import tempfile
 import time
@@ -276,88 +283,89 @@ def process_video_frame(frame, pose_detector, model, scaler, pose_history, featu
 
 
 
+
+
 def process_uploaded_video(video_path, pose_detector, model, scaler, feature_names, progress_bar, status_text):
-    """Process uploaded video file"""
-    cap = cv2.VideoCapture(video_path)
-    
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    # Save frames as images first
-    frames_dir = tempfile.mkdtemp()
-    
-    pose_history = deque(maxlen=30)
-    activity_log = []
-    frame_count = 0
-    
-    logging.info(f"Processing video, saving frames to: {frames_dir}")
-    
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        timestamp_ms = int(frame_count / fps * 1000)
-        
-        processed_frame, activity, confidence, probabilities = process_video_frame(
-            frame, pose_detector, model, scaler, pose_history, feature_names, timestamp_ms
-        )
-        
-        # Save frame as image
-        frame_path = os.path.join(frames_dir, f"frame_{frame_count:06d}.jpg")
-        cv2.imwrite(frame_path, processed_frame)
-        
-        logging.info(f"Frame {frame_count}: {activity} ({confidence:.2%})")
-        
-        activity_log.append({
-            'frame': frame_count,
-            'time': frame_count / fps,
-            'activity': activity,
-            'confidence': confidence
-        })
-        
-        frame_count += 1
-        if progress_bar:
-            progress_bar.progress(min(frame_count / total_frames, 1.0))
-        if status_text:
-            status_text.text(f"Processing frame {frame_count}/{total_frames}")
-    
-    cap.release()
-    
-    # Use ffmpeg to create video from frames
-    output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+    """Process uploaded video file using imageio (Streamlit Cloud compatible)"""
     
     try:
-        # Check if ffmpeg is available
-        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        # Read video metadata
+        props = iio.improps(video_path, plugin="pyav")
+        fps = props.fps if hasattr(props, 'fps') else 30.0
         
-        # Create video using ffmpeg
-        cmd = [
-            'ffmpeg',
-            '-framerate', str(fps),
-            '-i', os.path.join(frames_dir, 'frame_%06d.jpg'),
-            '-c:v', 'libx264',
-            '-pix_fmt', 'yuv420p',
-            '-y',  # Overwrite output file
-            output_path
-        ]
+        logging.info(f"Video FPS: {fps}")
         
-        subprocess.run(cmd, capture_output=True, check=True)
-        logging.info(f"Video created successfully: {output_path}")
+        # Create output path
+        output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
         
-    except subprocess.CalledProcessError as e:
-        logging.error(f"FFmpeg error: {e.stderr.decode()}")
-        raise RuntimeError("Failed to create video with ffmpeg")
-    except FileNotFoundError:
-        logging.error("FFmpeg not found")
-        raise RuntimeError("FFmpeg not installed on Streamlit Cloud")
-    finally:
-        # Clean up frames directory
-        shutil.rmtree(frames_dir, ignore_errors=True)
-    
-    return output_path, pd.DataFrame(activity_log)
+        # Initialize variables
+        pose_history = deque(maxlen=30)
+        activity_log = []
+        frame_count = 0
+        processed_frames = []
+        
+        # Read and process all frames
+        for frame in iio.imiter(video_path, plugin="pyav"):
+            # Convert RGB (imageio) to BGR (OpenCV)
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            timestamp_ms = int(frame_count / fps * 1000)
+            
+            # Process the frame
+            processed_frame, activity, confidence, probabilities = process_video_frame(
+                frame_bgr, pose_detector, model, scaler, pose_history, 
+                feature_names, timestamp_ms
+            )
+            
+            # Convert BGR back to RGB for video writing
+            processed_frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+            processed_frames.append(processed_frame_rgb)
+            
+            # Log activity
+            activity_log.append({
+                'frame': frame_count,
+                'time': frame_count / fps,
+                'activity': activity,
+                'confidence': confidence
+            })
+            
+            frame_count += 1
+            
+            # Update progress
+            if status_text:
+                status_text.text(f"Processing frame {frame_count}")
+            
+            # Log every 30 frames
+            if frame_count % 30 == 0:
+                logging.info(f"Processed {frame_count} frames, current activity: {activity}")
+        
+        # Write all frames to output video
+        logging.info(f"Writing {len(processed_frames)} frames to video at {fps} fps")
+        
+        iio.imwrite(
+            output_path,
+            processed_frames,
+            plugin="pyav",
+            fps=fps,
+            codec="libx264",
+            pixelformat="yuv420p"
+        )
+        
+        # Update progress to 100%
+        if progress_bar:
+            progress_bar.progress(1.0)
+        
+        # Verify output file
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            logging.info(f"Video processing complete: {frame_count} frames, size: {os.path.getsize(output_path)} bytes")
+        else:
+            raise RuntimeError("Output video file is empty or missing")
+        
+        return output_path, pd.DataFrame(activity_log)
+        
+    except Exception as e:
+        logging.error(f"Error processing video: {str(e)}", exc_info=True)
+        raise RuntimeError(f"Video processing failed: {str(e)}")
 
 
 def plot_activity_timeline(activity_log):
@@ -719,3 +727,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
