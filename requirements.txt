@@ -9,4 +9,5 @@ ffmpeg-python
 plotly
 av
 scikit-learn
-
+imageio-ffmpeg>=0.4.8
+imageio>=2.31.1
