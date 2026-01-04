@@ -286,6 +286,7 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
     activity_log = []
     frame_count = 0
     
+    print("Video Writer Output ", out)
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -299,7 +300,10 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
         )
         
         out.write(processed_frame)
-        
+        print("Frame count is ", frame_count)
+        print("Time is ", frame_count / fps)
+        print("Activity is ", activity)
+        print("Confidence score ", confidence)
         activity_log.append({
             'frame': frame_count,
             'time': frame_count / fps,
@@ -315,7 +319,7 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
     
     cap.release()
     out.release()
-    
+    print("Output Path is ", output_path)
     return output_path, pd.DataFrame(activity_log)
 
 def plot_activity_timeline(activity_log):
