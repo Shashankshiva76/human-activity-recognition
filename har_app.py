@@ -15,6 +15,8 @@ import os
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import logging
+import subprocess
+import shutil
 
 logging.basicConfig(level=logging.INFO)
 
@@ -272,6 +274,8 @@ def process_video_frame(frame, pose_detector, model, scaler, pose_history, featu
     
     return frame, activity, confidence, probabilities
 
+
+
 def process_uploaded_video(video_path, pose_detector, model, scaler, feature_names, progress_bar, status_text):
     """Process uploaded video file"""
     cap = cv2.VideoCapture(video_path)
@@ -281,32 +285,32 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    # Save frames as images first
+    frames_dir = tempfile.mkdtemp()
     
     pose_history = deque(maxlen=30)
     activity_log = []
     frame_count = 0
     
-    logging.info(f"Video Writer Output ${out}")
+    logging.info(f"Processing video, saving frames to: {frames_dir}")
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         
-        # Calculate timestamp in milliseconds
         timestamp_ms = int(frame_count / fps * 1000)
         
         processed_frame, activity, confidence, probabilities = process_video_frame(
             frame, pose_detector, model, scaler, pose_history, feature_names, timestamp_ms
         )
         
-        out.write(processed_frame)
-        logging.info(f"Frame count is ${frame_count}")
-        logging.info(f"Time is ${frame_count / fps}")
-        logging.info(f"Activity is ${activity}")
-        logging.info(f"Confidence score ${confidence}")
+        # Save frame as image
+        frame_path = os.path.join(frames_dir, f"frame_{frame_count:06d}.jpg")
+        cv2.imwrite(frame_path, processed_frame)
+        
+        logging.info(f"Frame {frame_count}: {activity} ({confidence:.2%})")
+        
         activity_log.append({
             'frame': frame_count,
             'time': frame_count / fps,
@@ -316,16 +320,45 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
         
         frame_count += 1
         if progress_bar:
-            progress_bar.progress(frame_count / total_frames)
+            progress_bar.progress(min(frame_count / total_frames, 1.0))
         if status_text:
             status_text.text(f"Processing frame {frame_count}/{total_frames}")
     
     cap.release()
-    out.release()
     
-    logging.info(f"Output Path is ${output_path}")
-
+    # Use ffmpeg to create video from frames
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+    
+    try:
+        # Check if ffmpeg is available
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        
+        # Create video using ffmpeg
+        cmd = [
+            'ffmpeg',
+            '-framerate', str(fps),
+            '-i', os.path.join(frames_dir, 'frame_%06d.jpg'),
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-y',  # Overwrite output file
+            output_path
+        ]
+        
+        subprocess.run(cmd, capture_output=True, check=True)
+        logging.info(f"Video created successfully: {output_path}")
+        
+    except subprocess.CalledProcessError as e:
+        logging.error(f"FFmpeg error: {e.stderr.decode()}")
+        raise RuntimeError("Failed to create video with ffmpeg")
+    except FileNotFoundError:
+        logging.error("FFmpeg not found")
+        raise RuntimeError("FFmpeg not installed on Streamlit Cloud")
+    finally:
+        # Clean up frames directory
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    
     return output_path, pd.DataFrame(activity_log)
+
 
 def plot_activity_timeline(activity_log):
     """Create timeline visualization"""
