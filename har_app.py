@@ -14,6 +14,9 @@ import plotly.express as px
 import os
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
@@ -286,7 +289,7 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
     activity_log = []
     frame_count = 0
     
-    print("Video Writer Output ", out)
+    logging.info(f"Video Writer Output ${out}")
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -300,10 +303,10 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
         )
         
         out.write(processed_frame)
-        print("Frame count is ", frame_count)
-        print("Time is ", frame_count / fps)
-        print("Activity is ", activity)
-        print("Confidence score ", confidence)
+        logging.info(f"Frame count is ${frame_count}")
+        logging.info(f"Time is ${frame_count / fps}")
+        logging.info(f"Activity is ${activity}")
+        logging.info(f"Confidence score ${confidence}")
         activity_log.append({
             'frame': frame_count,
             'time': frame_count / fps,
@@ -319,7 +322,9 @@ def process_uploaded_video(video_path, pose_detector, model, scaler, feature_nam
     
     cap.release()
     out.release()
-    print("Output Path is ", output_path)
+    
+    logging.info(f"Output Path is ${output_path}")
+
     return output_path, pd.DataFrame(activity_log)
 
 def plot_activity_timeline(activity_log):
@@ -499,11 +504,15 @@ def main():
             
             uploaded_file = st.file_uploader("Upload video file", type=['mp4', 'avi', 'mov'])
             
+            print("Upload File is : ", uploaded_file)
             if uploaded_file:
-                tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                tfile.write(uploaded_file.read())
-                video_path = tfile.name
+                # tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                # tfile.write(uploaded_file.read())
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
+                    tfile.write(uploaded_file.read())
+                    video_path = tfile.name
                 
+                print("TFFILE NAME: ", video_path)
                 st.video(video_path)
                 
                 if st.button("🚀 Process Video", type="primary"):
