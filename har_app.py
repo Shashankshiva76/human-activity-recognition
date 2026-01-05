@@ -4,13 +4,6 @@ import numpy as np
 import mediapipe as mp
 import joblib
 import pandas as pd
-import imageio.v3 as iio
-import numpy as np
-from collections import deque
-import tempfile
-import logging
-import os
-import cv2
 from collections import deque
 import tempfile
 import time
@@ -283,89 +276,88 @@ def process_video_frame(frame, pose_detector, model, scaler, pose_history, featu
 
 
 
-
-
 def process_uploaded_video(video_path, pose_detector, model, scaler, feature_names, progress_bar, status_text):
-    """Process uploaded video file using imageio (Streamlit Cloud compatible)"""
+    """Process uploaded video file"""
+    cap = cv2.VideoCapture(video_path)
     
-    try:
-        # Read video metadata
-        props = iio.improps(video_path, plugin="pyav")
-        fps = props.fps if hasattr(props, 'fps') else 30.0
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # Save frames as images first
+    frames_dir = tempfile.mkdtemp()
+    
+    pose_history = deque(maxlen=30)
+    activity_log = []
+    frame_count = 0
+    
+    logging.info(f"Processing video, saving frames to: {frames_dir}")
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
         
-        logging.info(f"Video FPS: {fps}")
+        timestamp_ms = int(frame_count / fps * 1000)
         
-        # Create output path
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        
-        # Initialize variables
-        pose_history = deque(maxlen=30)
-        activity_log = []
-        frame_count = 0
-        processed_frames = []
-        
-        # Read and process all frames
-        for frame in iio.imiter(video_path, plugin="pyav"):
-            # Convert RGB (imageio) to BGR (OpenCV)
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            
-            timestamp_ms = int(frame_count / fps * 1000)
-            
-            # Process the frame
-            processed_frame, activity, confidence, probabilities = process_video_frame(
-                frame_bgr, pose_detector, model, scaler, pose_history, 
-                feature_names, timestamp_ms
-            )
-            
-            # Convert BGR back to RGB for video writing
-            processed_frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-            processed_frames.append(processed_frame_rgb)
-            
-            # Log activity
-            activity_log.append({
-                'frame': frame_count,
-                'time': frame_count / fps,
-                'activity': activity,
-                'confidence': confidence
-            })
-            
-            frame_count += 1
-            
-            # Update progress
-            if status_text:
-                status_text.text(f"Processing frame {frame_count}")
-            
-            # Log every 30 frames
-            if frame_count % 30 == 0:
-                logging.info(f"Processed {frame_count} frames, current activity: {activity}")
-        
-        # Write all frames to output video
-        logging.info(f"Writing {len(processed_frames)} frames to video at {fps} fps")
-        
-        iio.imwrite(
-            output_path,
-            processed_frames,
-            plugin="pyav",
-            fps=fps,
-            codec="libx264",
-            pixelformat="yuv420p"
+        processed_frame, activity, confidence, probabilities = process_video_frame(
+            frame, pose_detector, model, scaler, pose_history, feature_names, timestamp_ms
         )
         
-        # Update progress to 100%
+        # Save frame as image
+        frame_path = os.path.join(frames_dir, f"frame_{frame_count:06d}.jpg")
+        cv2.imwrite(frame_path, processed_frame)
+        
+        logging.info(f"Frame {frame_count}: {activity} ({confidence:.2%})")
+        
+        activity_log.append({
+            'frame': frame_count,
+            'time': frame_count / fps,
+            'activity': activity,
+            'confidence': confidence
+        })
+        
+        frame_count += 1
         if progress_bar:
-            progress_bar.progress(1.0)
+            progress_bar.progress(min(frame_count / total_frames, 1.0))
+        if status_text:
+            status_text.text(f"Processing frame {frame_count}/{total_frames}")
+    
+    cap.release()
+    
+    # Use ffmpeg to create video from frames
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+    
+    try:
+        # Check if ffmpeg is available
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
         
-        # Verify output file
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            logging.info(f"Video processing complete: {frame_count} frames, size: {os.path.getsize(output_path)} bytes")
-        else:
-            raise RuntimeError("Output video file is empty or missing")
+        # Create video using ffmpeg
+        cmd = [
+            'ffmpeg',
+            '-framerate', str(fps),
+            '-i', os.path.join(frames_dir, 'frame_%06d.jpg'),
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-y',  # Overwrite output file
+            output_path
+        ]
         
-        return output_path, pd.DataFrame(activity_log)
+        subprocess.run(cmd, capture_output=True, check=True)
+        logging.info(f"Video created successfully: {output_path}")
         
-    except Exception as e:
-        logging.error(f"Error processing video: {str(e)}", exc_info=True)
-        raise RuntimeError(f"Video processing failed: {str(e)}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"FFmpeg error: {e.stderr.decode()}")
+        raise RuntimeError("Failed to create video with ffmpeg")
+    except FileNotFoundError:
+        logging.error("FFmpeg not found")
+        raise RuntimeError("FFmpeg not installed on Streamlit Cloud")
+    finally:
+        # Clean up frames directory
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    
+    return output_path, pd.DataFrame(activity_log)
 
 
 def plot_activity_timeline(activity_log):
@@ -439,13 +431,16 @@ def main():
         
         **Input Modes:**
         1. Sensor Data (JSON)
-        2. Video Upload
+        
   
         """)
+        # 2. Video Upload
         
         input_mode = st.radio(
             "Select Input Mode",
-            ["📱 Sensor Data (JSON)", "📁 Upload Video"]
+            ["📱 Sensor Data (JSON)"
+            #  ,"📁 Upload Video"
+              ]
         )
     # Clear video session state when switching to sensor mode
     if input_mode == "📱 Sensor Data (JSON)" and 'activity_log' in st.session_state:
@@ -539,69 +534,69 @@ def main():
                 else:
                     st.info("Upload sensor data and click Predict")
         
-        elif input_mode == "📁 Upload Video":
-            st.subheader("Video-Based Activity Recognition")
-            st.warning("⚠️ Video mode uses pose estimation to simulate sensor features. Results may vary from direct sensor input.")
+        # elif input_mode == "📁 Upload Video":
+        #     st.subheader("Video-Based Activity Recognition")
+        #     st.warning("⚠️ Video mode uses pose estimation to simulate sensor features. Results may vary from direct sensor input.")
             
-            uploaded_file = st.file_uploader("Upload video file", type=['mp4', 'avi', 'mov'])
+        #     uploaded_file = st.file_uploader("Upload video file", type=['mp4', 'avi', 'mov'])
             
-            print("Upload File is : ", uploaded_file)
-            if uploaded_file:
-                # tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                # tfile.write(uploaded_file.read())
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
-                    tfile.write(uploaded_file.read())
-                    video_path = tfile.name
+        #     print("Upload File is : ", uploaded_file)
+        #     if uploaded_file:
+        #         # tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        #         # tfile.write(uploaded_file.read())
+        #         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
+        #             tfile.write(uploaded_file.read())
+        #             video_path = tfile.name
                 
-                print("TFFILE NAME: ", video_path)
-                st.video(video_path)
+        #         print("TFFILE NAME: ", video_path)
+        #         st.video(video_path)
                 
-                if st.button("🚀 Process Video", type="primary"):
-                    pose_detector  = load_pose_detector()
+        #         if st.button("🚀 Process Video", type="primary"):
+        #             pose_detector  = load_pose_detector()
                     
-                    with st.spinner("Processing video..."):
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
+        #             with st.spinner("Processing video..."):
+        #                 progress_bar = st.progress(0)
+        #                 status_text = st.empty()
                         
-                        output_path, activity_log = process_uploaded_video(
-                            video_path, pose_detector, model, scaler, 
-                            feature_names, progress_bar, status_text
-                        )
+        #                 output_path, activity_log = process_uploaded_video(
+        #                     video_path, pose_detector, model, scaler, 
+        #                     feature_names, progress_bar, status_text
+        #                 )
                         
-                        st.success("✅ Processing complete!")
+        #                 st.success("✅ Processing complete!")
                         
-                        st.session_state['processed_video'] = output_path
-                        st.session_state['activity_log'] = activity_log
+        #                 st.session_state['processed_video'] = output_path
+        #                 st.session_state['activity_log'] = activity_log
                         
-                        st.subheader("Processed Video")
-                        st.video(output_path)
+        #                 st.subheader("Processed Video")
+        #                 st.video(output_path)
                         
-                        if activity_log is not None and not activity_log.empty:
-                            if 'time' in activity_log.columns:
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Duration", f"{activity_log['time'].max():.1f}s")
-                                with col2:
-                                    most_common = activity_log['activity'].mode()[0] if len(activity_log['activity'].mode()) > 0 else "N/A"
-                                    st.metric("Primary Activity", most_common)
-                                with col3:
-                                    avg_conf = activity_log['confidence'].mean()
-                                    st.metric("Avg Confidence", f"{avg_conf:.1%}")
+        #                 if activity_log is not None and not activity_log.empty:
+        #                     if 'time' in activity_log.columns:
+        #                         col1, col2, col3 = st.columns(3)
+        #                         with col1:
+        #                             st.metric("Duration", f"{activity_log['time'].max():.1f}s")
+        #                         with col2:
+        #                             most_common = activity_log['activity'].mode()[0] if len(activity_log['activity'].mode()) > 0 else "N/A"
+        #                             st.metric("Primary Activity", most_common)
+        #                         with col3:
+        #                             avg_conf = activity_log['confidence'].mean()
+        #                             st.metric("Avg Confidence", f"{avg_conf:.1%}")
                                 
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    fig = plot_activity_timeline(activity_log)
-                                    st.plotly_chart(fig, use_container_width=True)
-                                with col2:
-                                    fig = plot_activity_distribution(activity_log)
-                                    st.plotly_chart(fig, use_container_width=True)
+        #                         col1, col2 = st.columns(2)
+        #                         with col1:
+        #                             fig = plot_activity_timeline(activity_log)
+        #                             st.plotly_chart(fig, use_container_width=True)
+        #                         with col2:
+        #                             fig = plot_activity_distribution(activity_log)
+        #                             st.plotly_chart(fig, use_container_width=True)
                                 
-                                fig = plot_confidence_over_time(activity_log)
-                                st.plotly_chart(fig, use_container_width=True)
-                            else:
-                                st.error(f"Missing 'time' column. Available columns: {activity_log.columns.tolist()}")
-                        else:
-                            st.error("Activity log is empty or None")
+        #                         fig = plot_confidence_over_time(activity_log)
+        #                         st.plotly_chart(fig, use_container_width=True)
+        #                     else:
+        #                         st.error(f"Missing 'time' column. Available columns: {activity_log.columns.tolist()}")
+        #                 else:
+        #                     st.error("Activity log is empty or None")
         
        
     # Tab 2: Analytics
@@ -727,4 +722,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
